@@ -48,13 +48,13 @@ type Server struct {
 type permissionsSpriteKey struct{}
 
 func NewSSHServer(opts *ServeOptions, spriteOpts *SpriteOptions) *Server {
-	serverConfig := &ssh.ServerConfig{NoClientAuth: true}
+	serverConfig := &ssh.ServerConfig{}
 	serverConfig.AddHostKey(opts.HostPrivateEd25519.Key)
 
 	client := sprites.New(spriteOpts.AuthToken, sprites.WithBaseURL(spriteOpts.API))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	serverConfig.NoClientAuthCallback = func(cm ssh.ConnMetadata) (*ssh.Permissions, error) {
+	serverConfig.PublicKeyCallback = func(cm ssh.ConnMetadata, _ ssh.PublicKey) (*ssh.Permissions, error) {
 		sprite, err := client.GetSprite(ctx, cm.User())
 		if err != nil {
 			return nil, &ssh.BannerError{Err: err, Message: "Sprite not found"}
