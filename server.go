@@ -475,7 +475,7 @@ func shouldRetry(err error) bool {
 
 func (s *Session) exec(ctx context.Context, command string) error {
 	cmd := s.sprite.CommandContext(
-		ctx, "/bin/bash", "-c",
+		ctx, "/usr/bin/sudo", "--user=sprite", "--login", "/bin/sh", "-c",
 		// escape single quotes to avoid any word splitting except by $SHELL
 		fmt.Sprintf(
 			`${SHELL:-/bin/bash} -c '%s'`, strings.ReplaceAll(command, `'`, `'"'"'`),
@@ -487,6 +487,10 @@ func (s *Session) exec(ctx context.Context, command string) error {
 	if s.tty {
 		cmd.SetTTY(true)
 		cmd.SetTTYSize(uint16(s.win.Cols), uint16(s.win.Rows))
+
+		winCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go s.listenForWindowChange(winCtx, cmd)
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -499,10 +503,6 @@ func (s *Session) exec(ctx context.Context, command string) error {
 		"session.exec.cmd", command,
 	)
 	// TODO: get session ID for resume
-
-	winCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go s.listenForWindowChange(winCtx, cmd)
 
 	var exit *sprites.ExitError
 	if err := cmd.Wait(); err != nil && !errors.As(err, &exit) {
