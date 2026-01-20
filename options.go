@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jbellerb/spritessh/internal/sprites"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -17,9 +18,10 @@ const (
 	configLogLevelVar            = "SPRITESSH_LOG"
 	configShutdownGracePeriodVar = "SPRITESSH_SHUTDOWN_GRACE_PERIOD"
 
-	configSpritesAPI        = "SPRITESSH_SPRITES_API"
-	configSpritesAuthToken  = "SPRITESSH_SPRITES_AUTH_TOKEN"
-	configSpritesMaxRetries = "SPRITESSH_SPRITES_MAX_RETRIES"
+	configSpritesAPI          = "SPRITESSH_SPRITES_API"
+	configSpritesAuthToken    = "SPRITESSH_SPRITES_AUTH_TOKEN"
+	configSpritesOrganization = "SPRITESSH_SPRITES_ORGANIZATION"
+	configSpritesMaxRetries   = "SPRITESSH_SPRITES_MAX_RETRIES"
 
 	configSSHSocketTimeoutVar = "SPRITESSH_SSH_SOCKET_TIMEOUT"
 	configSSHListenAddr       = "SPRITESSH_SSH_LISTEN_ADDR"
@@ -76,31 +78,30 @@ func NewRootOptions() *RootOptions {
 }
 
 func (o *RootOptions) ReadEnv() error {
+	if err := o.Sprite.ReadEnv(); err != nil {
+		return err
+	}
+
 	return readEnvValues([]keyValue{
 		{configLogLevelVar, &o.LogLevel},
 		{configShutdownGracePeriodVar, (*DurationValue)(&o.ShutdownGracePeriod)},
-		{configSpritesAPI, (*StringValue)(&o.Sprite.API)},
-		{configSpritesAuthToken, (*StringValue)(&o.Sprite.AuthToken)},
-		{configSpritesMaxRetries, (*IntValue)(&o.Sprite.MaxRetries)},
 	})
 }
 
-func (o *RootOptions) Flags(fs *flag.FlagSet) {}
+func (o *RootOptions) Flags(fs *flag.FlagSet) {
+	o.Sprite.Flags(fs)
+}
 
 // SpriteOptions are shared options related to the Sprites API.
 type SpriteOptions struct {
-	API       string
-	AuthToken string
+	sprites.TokenOptions
 
 	MaxRetries int
 }
 
 // NewSpriteOptions returns a new instance of SpriteOptions.
 func NewSpriteOptions() *SpriteOptions {
-	return &SpriteOptions{
-		API:        "https://api.sprites.dev",
-		MaxRetries: 5,
-	}
+	return &SpriteOptions{MaxRetries: 5}
 }
 
 // RootOptions are the options for the "spritessh serve" command.
@@ -115,6 +116,20 @@ func NewServeOptions() *ServeOptions {
 		SocketTimeout: 10 * time.Second,
 		ListenAddr:    ":22",
 	}
+}
+
+func (o *SpriteOptions) ReadEnv() error {
+	return readEnvValues([]keyValue{
+		{configSpritesAPI, (*StringValue)(&o.API)},
+		{configSpritesAuthToken, (*StringValue)(&o.AuthToken)},
+		{configSpritesOrganization, (*StringValue)(&o.Organization)},
+		{configSpritesMaxRetries, (*IntValue)(&o.MaxRetries)},
+	})
+}
+
+func (o *SpriteOptions) Flags(fs *flag.FlagSet) {
+	fs.Var((*StringValue)(&o.Organization), "o", "")
+	fs.Var((*StringValue)(&o.Organization), "org", "")
 }
 
 func (o *ServeOptions) ReadEnv() error {

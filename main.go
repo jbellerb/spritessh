@@ -166,8 +166,11 @@ Commands:
   help      get help on other commands
 
 Examples:
-  Open an SSH server proxying sprites.
-  $ spritessh serve
+  Open an SSH server proxying sprites on port 2222.
+  $ spritessh serve -l ':2222'
+
+  Open an SSH server proxying sprites from the 'cool-sprites-123' organization.
+  $ spritessh serve -o 'cool-sprites-123'
 
 Notes:
   Use `+"`spritessh help <command>`"+` for details on a subcommand.
@@ -194,11 +197,14 @@ func (c *ServeCommand) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	if err := c.rootOpts.Sprite.TokenOptions.Resolve(); err != nil {
+		return err
+	}
+	srv := NewSSHServer(opts, c.rootOpts.Sprite)
+
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go waitForGracefulShutdown(serveCtx, cancel)
-
-	srv := NewSSHServer(opts, c.rootOpts.Sprite)
 
 	bindCtx, cancel := context.WithTimeout(serveCtx, opts.SocketTimeout)
 	defer cancel()
@@ -245,17 +251,22 @@ func (c *ServeCommand) Run(ctx context.Context, args []string) error {
 
 // Usage writes the usage information to an [io.Writer].
 func (c *ServeCommand) Usage(w io.Writer) {
-	fmt.Fprint(w, `Usage: spritessh serve [-l <addr>]
+	fmt.Fprint(w, `Usage: spritessh serve [-l <addr>] [-o <organization>]
 
 Run the SSH server for sprites.
 
 Options:
   -l, --listen-addr <addr>    address to listen for connections on. Defaults
                               ":22".
+  -o, --org <org>             fly.io organization of sprites to serve
+                              connections for. Defaults to
 
 Examples:
-  Open an SSH server proxying sprites.
+  Open an SSH server proxying sprites on port 2222.
   $ spritessh serve -l ':2222'
+
+  Open an SSH server proxying sprites from the 'cool-sprites-123' organization.
+  $ spritessh serve -o 'cool-sprites-123'
 `)
 }
 

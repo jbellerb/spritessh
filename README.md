@@ -26,7 +26,6 @@ go install github.com/jbellerb/spritessh@latest
 ssh-keygen -t ed25519 -N "" -f spritessh_ed25519
 
 # Configure the server with environment variables
-export SPRITESSH_SPRITES_AUTH_TOKEN="<generate an access token on the website>"
 export SPRITESSH_SSH_LISTEN_ADDR=":2222"
 export SPRITESSH_SSH_HOST_KEY_ED25519=$(cat spritessh_ed25519)
 
