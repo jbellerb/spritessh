@@ -20,6 +20,8 @@ import (
 )
 
 var (
+	errNoHostKey = errors.New("no host private keys set")
+
 	errServerClosed = errors.New("server closed")
 
 	errAlreadyRunning = errors.New("exec already running")
@@ -47,9 +49,13 @@ type Server struct {
 
 type permissionsSpriteKey struct{}
 
-func NewSSHServer(opts *ServeOptions, spriteOpts *SpriteOptions) *Server {
+func NewSSHServer(opts *ServeOptions, spriteOpts *SpriteOptions) (*Server, error) {
 	serverConfig := &ssh.ServerConfig{}
-	serverConfig.AddHostKey(opts.HostPrivateEd25519.Key)
+	if opts.HostPrivateEd25519 != nil {
+		serverConfig.AddHostKey(opts.HostPrivateEd25519)
+	} else {
+		return nil, errNoHostKey
+	}
 
 	client := sprites.New(spriteOpts.AuthToken, sprites.WithBaseURL(spriteOpts.API))
 
@@ -63,12 +69,14 @@ func NewSSHServer(opts *ServeOptions, spriteOpts *SpriteOptions) *Server {
 		return &ssh.Permissions{ExtraData: map[any]any{permissionsSpriteKey{}: sprite}}, nil
 	}
 
-	return &Server{
+	s := &Server{
 		serverConfig:  serverConfig,
 		spritesConfig: spriteOpts,
 		listeners:     make(map[net.Listener]struct{}),
 		cancel:        cancel,
 	}
+
+	return s, nil
 }
 
 func Bind(ctx context.Context, addr string) (net.Listener, error) {

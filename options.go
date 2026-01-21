@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +30,11 @@ const (
 	configSSHSocketTimeoutVar = "SPRITESSH_SSH_SOCKET_TIMEOUT"
 	configSSHListenAddr       = "SPRITESSH_SSH_LISTEN_ADDR"
 	configSSHHostKeyEd25519   = "SPRITESSH_SSH_HOST_KEY_ED25519"
+)
+
+var (
+	defaultHostKeyName    = "spritessh_host_ed25519_key"
+	defaultHostKeyComment = "sprite@spritessh"
 )
 
 // Options is a set of options for a subcommand.
@@ -104,20 +113,6 @@ func NewSpriteOptions() *SpriteOptions {
 	return &SpriteOptions{MaxRetries: 5}
 }
 
-// RootOptions are the options for the "spritessh serve" command.
-type ServeOptions struct {
-	SocketTimeout      time.Duration
-	ListenAddr         string
-	HostPrivateEd25519 Ed25519SigningKey
-}
-
-func NewServeOptions() *ServeOptions {
-	return &ServeOptions{
-		SocketTimeout: 10 * time.Second,
-		ListenAddr:    ":22",
-	}
-}
-
 func (o *SpriteOptions) ReadEnv() error {
 	return readEnvValues([]keyValue{
 		{configSpritesAPI, (*StringValue)(&o.API)},
@@ -132,25 +127,31 @@ func (o *SpriteOptions) Flags(fs *flag.FlagSet) {
 	fs.Var((*StringValue)(&o.Organization), "org", "")
 }
 
+// RootOptions are the options for the "spritessh serve" command.
+type ServeOptions struct {
+	SocketTimeout      time.Duration
+	ListenAddr         string
+	HostPrivateEd25519 ssh.Signer
+}
+
+func NewServeOptions() *ServeOptions {
+	return &ServeOptions{
+		SocketTimeout: 10 * time.Second,
+		ListenAddr:    ":22",
+	}
+}
+
 func (o *ServeOptions) ReadEnv() error {
 	return readEnvValues([]keyValue{
 		{configSSHSocketTimeoutVar, (*DurationValue)(&o.SocketTimeout)},
 		{configSSHListenAddr, (*StringValue)(&o.ListenAddr)},
-		{configSSHHostKeyEd25519, &o.HostPrivateEd25519},
+		{configSSHHostKeyEd25519, &Ed25519SignerValue{o.HostPrivateEd25519}},
 	})
 }
 
 func (o *ServeOptions) Flags(fs *flag.FlagSet) {
 	fs.Var((*StringValue)(&o.ListenAddr), "l", "")
 	fs.Var((*StringValue)(&o.ListenAddr), "listen-addr", "")
-}
-
-func (o *ServeOptions) Validate() error {
-	if o.HostPrivateEd25519.Key == nil {
-		return fmt.Errorf("no host private keys set")
-	}
-
-	return nil
 }
 
 type LogLevel struct {
@@ -189,30 +190,72 @@ func (log *LogLevel) String() string {
 	}
 }
 
-type Ed25519SigningKey struct {
-	Key ssh.Signer
+// defaultHostKeyPath returns the default path to the server host key:
+// ~/.ssh/spritessh_host_ed25519_key
+func defaultHostKeyPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(homeDir, ".ssh", defaultHostKeyName), nil
 }
 
-func (key *Ed25519SigningKey) Set(s string) error {
-	private, err := ssh.ParsePrivateKey([]byte(s))
+// loadHostKey loads the Ed25519 host key at the given path.
+func loadHostKey(path string) (ssh.Signer, error) {
+	rawKey, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("parse Ed25519 private key: %w", err)
+		return nil, err
 	}
 
-	key.Key, err = ssh.NewSignerWithAlgorithms(private.(ssh.AlgorithmSigner), []string{ssh.KeyAlgoED25519})
-	if err != nil {
-		return fmt.Errorf("expected Ed25519 private key: %w", err)
+	var k Ed25519SignerValue
+	if err := k.Set(string(rawKey)); err != nil {
+		return nil, err
 	}
 
-	return nil
+	return k.Signer, nil
 }
 
-func (key *Ed25519SigningKey) String() string {
-	if key.Key != nil {
-		return "[Redacted Ed25519 Private Key]"
+// generateHostKey generates a new Ed25519 host key and writes it to the given
+// path.
+func generateHostKey(path string) (ssh.Signer, error) {
+	rawPub, rawPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return nil, err
+	}
+	pub, err := ssh.NewPublicKey(rawPub)
+	if err != nil {
+		return nil, err
+	}
+	priv, err := ssh.NewSignerFromKey(rawPriv)
+	if err != nil {
+		return nil, err
 	}
 
-	return ""
+	// ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+
+	// write the private key
+	privPem, err := ssh.MarshalPrivateKey(rawPriv, defaultHostKeyComment)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := pem.Encode(&buf, privPem); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0600); err != nil {
+		return nil, err
+	}
+
+	// write the public key, ignoring errors
+	pubAuth := string(ssh.MarshalAuthorizedKey(pub))
+	pubAuth = fmt.Sprintf("%s %s\n", strings.TrimSuffix(pubAuth, "\n"), defaultHostKeyComment)
+	_ = os.WriteFile(path+".pub", []byte(pubAuth), 0644)
+
+	return priv, nil
 }
 
 type keyValue struct {
@@ -231,20 +274,46 @@ func readEnvValues(vars []keyValue) error {
 	return nil
 }
 
+type Ed25519SignerValue struct{ ssh.Signer }
+
+func (s *Ed25519SignerValue) Set(val string) error {
+	priv, err := ssh.ParsePrivateKey([]byte(val))
+	if err != nil {
+		return fmt.Errorf("parse SSH private key: %w", err)
+	}
+
+	s.Signer, err = ssh.NewSignerWithAlgorithms(
+		priv.(ssh.AlgorithmSigner), []string{ssh.KeyAlgoED25519},
+	)
+	if err != nil {
+		return fmt.Errorf("expected Ed25519 private key: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Ed25519SignerValue) String() string {
+	if s.Signer != nil {
+		return "[Redacted SSH Private Key]"
+	}
+
+	return ""
+}
+
 type IntValue int
 
-func (s *IntValue) Set(val string) error {
+func (i *IntValue) Set(val string) error {
 	n, err := strconv.ParseInt(val, 10, 32)
 	if err != nil {
 		return err
 	}
 
-	*s = IntValue(n)
+	*i = IntValue(n)
 	return nil
 }
 
-func (s *IntValue) String() string {
-	return fmt.Sprintf("%d", int(*s))
+func (i *IntValue) String() string {
+	return fmt.Sprintf("%d", int(*i))
 }
 
 type StringValue string

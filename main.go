@@ -193,14 +193,22 @@ func (c *ServeCommand) Run(ctx context.Context, args []string) error {
 	_, err := ParseOptions(c, opts, args)
 	if err != nil {
 		return err
-	} else if err := opts.Validate(); err != nil {
-		return err
 	}
 
 	if err := c.rootOpts.Sprite.TokenOptions.Resolve(); err != nil {
 		return err
 	}
-	srv := NewSSHServer(opts, c.rootOpts.Sprite)
+
+	if opts.HostPrivateEd25519 == nil {
+		if err := loadOrGenerateHostKey(ctx, opts); err != nil {
+			return err
+		}
+	}
+
+	s, err := NewSSHServer(opts, c.rootOpts.Sprite)
+	if err != nil {
+		return err
+	}
 
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -220,7 +228,7 @@ func (c *ServeCommand) Run(ctx context.Context, args []string) error {
 
 	slog.InfoContext(serveCtx, "Started SSH server", "server.addr", l.Addr().String())
 	server := make(chan error)
-	go func() { server <- srv.Serve(serveCtx, l) }()
+	go func() { server <- s.Serve(serveCtx, l) }()
 
 	select {
 	case <-serveCtx.Done():
@@ -231,7 +239,7 @@ func (c *ServeCommand) Run(ctx context.Context, args []string) error {
 		)
 		defer cancel()
 
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		if err := s.Shutdown(shutdownCtx); err != nil {
 			slog.WarnContext(
 				shutdownCtx,
 				"Shutdown did not complete in time, closing anyways",
@@ -247,6 +255,29 @@ func (c *ServeCommand) Run(ctx context.Context, args []string) error {
 
 		return fmt.Errorf("server unexpectedly stopped")
 	}
+}
+
+func loadOrGenerateHostKey(ctx context.Context, opts *ServeOptions) error {
+	path, err := defaultHostKeyPath()
+	if err != nil {
+		return fmt.Errorf("unable to find host key directory: %w", err)
+	}
+
+	var msg string
+	if opts.HostPrivateEd25519, err = loadHostKey(path); err == nil {
+		msg = "Loaded SSH host key"
+	} else if errors.Is(err, os.ErrNotExist) {
+		if opts.HostPrivateEd25519, err = generateHostKey(path); err == nil {
+			msg = "Generated new SSH host key"
+		} else {
+			return fmt.Errorf("failed to generate SSH host key: %w", err)
+		}
+	} else {
+		return fmt.Errorf("failed to load SSH host key: %w", err)
+	}
+	slog.InfoContext(ctx, msg, "key.path", path, "key.algorithm", "ed25519")
+
+	return nil
 }
 
 // Usage writes the usage information to an [io.Writer].

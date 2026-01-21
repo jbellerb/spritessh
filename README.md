@@ -22,21 +22,14 @@ go install github.com/jbellerb/spritessh@latest
 # Alternatively, clone the repo and run
 # make build
 
-# Generate a new Ed25519 SSH key
-ssh-keygen -t ed25519 -N "" -f spritessh_ed25519
-
-# Configure the server with environment variables
-export SPRITESSH_SSH_LISTEN_ADDR=":2222"
-export SPRITESSH_SSH_HOST_KEY_ED25519=$(cat spritessh_ed25519)
-
 # Start the server on the configured port
-spritessh serve
+spritessh serve -l ':2222'
 ```
 
 In another terminal:
 
 ```sh
-ssh <sprite-name>@localhost -p 2222
+ssh $sprite_name@localhost -p 2222
 ```
 
 For convenience, consider adding an alias to your `~/.ssh/config`:
